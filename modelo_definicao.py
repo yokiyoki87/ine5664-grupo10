@@ -1,5 +1,6 @@
-
+import datetime
 import numpy as np
+import csv
 
 #IDs das funções de ativação
 F_RELU     = 0
@@ -61,7 +62,7 @@ def entropia_cruzada_categorica(my1,my2):
 class RedeMulticamadas:
     def __init__(self,*args):
         if type(args[0]) in [list,tuple]:
-            self.criar(args)
+            self.criar(*args)
     
 
     def criar(self,*camadas,labels_saida=[]):
@@ -76,6 +77,7 @@ class RedeMulticamadas:
         """
 
         # cria nova rede MLP
+        self.tamanhos = []
         self.pesos = []
         self.ativacao = []
         self.vieses = []
@@ -89,25 +91,35 @@ class RedeMulticamadas:
         # se for classificador, vai ser utilizado na saida
         self.classificacao = labels_saida
     
-    def criar_camada(self,tamanho,ativacao=F_RELU,vies=None,custo=C_QUAD):
+    def criar_camada(self,tamanho,ativacao=F_RELU,custo=C_QUAD,vies=None):
         "Ver acima a definição de camadas"
-
-        tamanho_anterior = self.pesos[-1] if self.pesos else 1
-        self.pesos.append(np.full((tamanho_anterior,tamanho),0.5))
-        self.ativacao.append(ativacao)
-        if not vies: vies = np.zeros(tamanho)
-        self.vieses.append(vies)
-        self.custos.append(custo)
+        
+        if self.n_camadas:
+            tamanho_anterior = self.tamanhos[-1]
+            self.pesos.append(np.full((tamanho_anterior,tamanho),0.5))
+            self.ativacao.append(ativacao)
+            if not vies: vies = np.zeros(tamanho)
+            self.vieses.append(vies)
+            self.custos.append(custo)
+        self.tamanhos.append(tamanho)
         self.n_camadas += 1
 
 
-    def carregar(self,*args):
+    def carregar(self,arquivo):
         # TODO
-        pass
+        print("NAO IMPLEMENTADO")
     
-    def salvar(self,*args):
-        # TODO
-        pass
+    def salvar(self):
+        with open("modelos_treinados/"+str(datetime.datetime.now())+".txt","w") as f:
+            f.write(str(self.tamanhos[0]))
+            for i in range(1,self.n_camadas-1):
+                dadocam = f"{self.tamanhos[i]} {self.ativacao[i]} {self.custos[i]}\n"
+                vies = " ".join(map(str,self.vieses[i])) + "\n"
+                f.write(dadocam)
+                f.write(vies)
+            for i in self.pesos:
+                for linha in i:
+                    f.write(" ".join(map(str,linha))+"\n")
 
 
     def treinar(self,dataset,epocas,taxa_apr,func_erro=C_QUAD):
@@ -115,59 +127,63 @@ class RedeMulticamadas:
         Cada dataset é uma tupla com o último valor sendo a saída esperada
         """
         pesos_t = [np.transpose(i) for i in self.pesos]
+        #pesos_t.reverse()
         f_erro = erro_quad if func_erro == C_QUAD else \
                 entropia_cruzada_binaria if func_erro == C_BCE else \
                 entropia_cruzada_categorica
-        for _ in range(epocas):
+        for ep in range(epocas):
             for instancia in dataset:
                 #feedforward
                 real = instancia[-1]
                 entrada = instancia[:-1]
-                predicao = self.responder_todos(entrada)
+                predicao = self.responder_todas(entrada)
 
                 # backpropagation
                 
                 # determinar erro da ultima camada dependendo do tipo
                 tam = np.size(predicao[-1])
                 if tam == 1:
-                    erro = [np.array([f_erro(predicao,entrada)])]
+                    erro = [np.array(f_erro(predicao[-1],real))]
                 else:
                     e = np.ones((tam))
                     e[real] = 0.0
                     erro = [e]
 
                 #calcular erro para cada camada anterior
-                for i in range(self.n_camadas-1,-1,-1):
-                    if self.ativacao == F_RELU:
+                for i in range(self.n_camadas-2,0,-1):
+                    if self.ativacao[i] == F_RELU:
                         d = np.vectorize(d_relu)
-                    elif self.ativacao == F_LOGIST:
+                    elif self.ativacao[i] == F_LOGIST:
                         d = np.vectorize(d_logistica)
-                    elif self.ativacao == F_TANH:
+                    elif self.ativacao[i] == F_TANH:
                         d = np.vectorize(d_tanh)
-                    elif self.ativacao == F_SOFTPLUS:
+                    elif self.ativacao[i] == F_SOFTPLUS:
                         d = np.vectorize(d_softplus)
-                    prox_erro = np.multiply(d(predicao[i]),np.matmul(erro[-1],pesos_t[i]))
+                    
+                    dxde = d(predicao[i])                   #
+                    dxdw = np.matmul(erro[-1],pesos_t[i])   # TODO: PEGAR A EQUACAO CERTA
+                    prox_erro = np.multiply(dxde,dxdw)      #
                     erro.append(prox_erro)
-                erro = erro.reverse()
+                erro.reverse()
 
-                for i in range(self.n_camadas):
-                    for j in range(len(erro[i])):
+                for i in range(self.n_camadas-1):
+                    for j in range(self.pesos[i].shape[0] if self.pesos[i].shape[1] > 1 else 1):
                         self.pesos[i][j] -= taxa_apr * erro[i][j]
                 
                 # TODO: continuar aqui implementacao backpropagation
+            print(f"epoch {ep} done")
 
-                    
 
+    def testar(self,dataset):
 
-    def testar_acuracia(self,dataset):
         total = 0
         corretos = 0
         for instancia in dataset:
             total += 1
-            res = self.responder(instancia)
+            res = self.responder(instancia[:-1])
             if res == instancia[-1]:
                 corretos += 1
-        return total / corretos
+        return corretos/total
 
 
     def responder_todas(self,entrada):
@@ -177,7 +193,7 @@ class RedeMulticamadas:
         """
         respostas = []
         anterior = entrada
-        for i in range(self.n_camadas):
+        for i in range(self.n_camadas-1):
             # determinar funcao de ativacao desta camada
             if self.ativacao[i] == F_RELU:
                 f = np.vectorize(relu)
@@ -206,13 +222,18 @@ class RedeMulticamadas:
 
 
 
-def abrir_dataset(arq):
+def abrir_dataset(arq,delimita=",",prop=0.9):
+    "Abre o dataset .csv, removendo a legenda da primeira fileira"
+    dados = []
     with open(arq) as f:
-        dados = f.readlines()
-    
-    # TODO: processar dados
-
-    return dados
+        raw = csv.reader(f,dialect='excel',delimiter=delimita)
+        dados = [i for i in raw]
+    dados.pop(0) # tira labels do dataset
+    dados = [list(map(float,i)) for i in dados]
+    tam = int(len(dados)*prop)
+    treino = dados[:tam]
+    teste = dados[tam:]
+    return treino,teste
 
 if __name__ == "__main":
     print("this is the only way it could have ended")
